@@ -105,7 +105,7 @@ class XDeepFMWrapper:
         if self.dnn_model:
             dnn_model = self.dnn_model
         else:
-            dnn_model = DNN(hidden_units=[256, 128, 64, 2], l2_reg=0.01)
+            dnn_model = DNN(hidden_units=[128, 64, 2], l2_reg=0.01)
             # dnn_model = tf.keras.Sequential([tf.keras.layers.Dense(units=256),
             #                                  tf.keras.layers.Dense(units=128),
             #                                  tf.keras.layers.Dense(units=64),

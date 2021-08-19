@@ -13,3 +13,6 @@ deepctr
 * linear
 * dnn
 * fm
+
+* 模型训练
+训练demo使用tensorflow_transform实现

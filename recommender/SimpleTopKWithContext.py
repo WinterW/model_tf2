@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
-
+from tensorflow_recommenders.layers.embedding.tpu_embedding_layer import TPUEmbedding
 import tensorflow_recommenders as tfrs
 ratings = tfds.load("movielens/100k-ratings", split="train")
 movies = tfds.load("movielens/100k-movies", split="train")

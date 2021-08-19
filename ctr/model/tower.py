@@ -34,23 +34,23 @@ def _check_fm_columns(feature_columns):
 '''
 
 
-class DeepFMWrapper:
+class TowerWrapper:
     def __init__(self,
                  feature_spec,
-                 wide_columns,
-                 deep_columns,
-                 linear_model: Layer = None,
-                 dnn_model: Layer = None,
-                 fm_model: Layer = None,
+                 user_columns,
+                 item_columns,
+                 interaction_columns,
+                 user_model: Layer = None,  # 输出一个用户向量
+                 item_model: Layer = None,  # 输出一个item向量
                  activation=None,
                  ):
         ''''''
         self.feature_spec = feature_spec
-        self.wide_columns = wide_columns
-        self.deep_columns = deep_columns
-        self.linear_model = linear_model
-        self.dnn_model = dnn_model
-        self.fm_model = fm_model
+        self.user_columns = user_columns
+        self.item_columns = item_columns
+        self.interaction_columns = interaction_columns
+        self.user_model = user_model
+        self.item_model = item_model
         self.activation = activations.get(activation)
 
     '''

@@ -5,7 +5,7 @@ import tempfile
 from typing import Dict, Text
 
 import numpy as np
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import tensorflow_recommenders as tfrs
@@ -117,8 +117,8 @@ class MovielensModel(tfrs.models.Model):
 
 print(tf.config.experimental.list_physical_devices(device_type='GPU'))
 
-tf.config.set_soft_device_placement(True)
-tf.compat.v1.config.set_soft_device_placement(True)
+#tf.config.set_soft_device_placement(True)
+#tf.compat.v1.config.set_soft_device_placement(True)
 # mirrored_strategy = tf.distribute.MirroredStrategy()
 # with mirrored_strategy.scope():
 model = MovielensModel(rating_weight=1.0, retrieval_weight=1.0)
