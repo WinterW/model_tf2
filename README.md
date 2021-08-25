@@ -16,3 +16,25 @@ deepctr
 
 * 模型训练
 训练demo使用tensorflow_transform实现
+  
+# tower
+```mermaid
+graph LR
+A[user_feature] -->B[user_model]
+C[item_feature] -->D[item_model]
+E[interaction_model] -->G[item_vec]
+B[user_model] -->F[retrieval_task]
+D[item_model] -->F[retrieval_task]
+B[user_model] -->G[rank_task]
+D[item_model] -->G[rank_task]
+F[retrieval_task] -->H[training_loss]
+G[rank_task] -->H[training_loss]
+```
+
+# dcn   
+dcn-v  原始dcn，交叉使用向量权重   
+dcn-m  原始dcn，交叉使用矩阵权重   
+dcn-mix  将交叉矩阵拆解成两个低秩矩阵
+  
+ps.
+可以通过可视化矩阵权重，识别哪个特征交叉项是重要特征

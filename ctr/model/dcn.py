@@ -17,6 +17,7 @@ from layer.crossnet import CrossNetMix
 
 '''
 用组合将模型重新封装,使用函数式 API, 因为model类对输入不灵活，比如使用特征工程时想将Input作为输入
+todo:只实现dnn和crossnet concat， 需要可配置crossnet和dnn stack
 '''
 
 

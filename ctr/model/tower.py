@@ -1,11 +1,12 @@
 from absl import logging
+import collections
+from typing import Dict, Text
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, Embedding, Dropout, Input
 from tensorflow.keras import activations
 from tensorflow.keras.regularizers import l2
-
-import collections
+import tensorflow_recommenders as tfrs
 
 from layer.fm import FM
 from layer.dnn import DNN
@@ -15,23 +16,40 @@ from tensorflow.python.keras.layers import Layer
 from deepctr.layers.interaction import FM
 
 
-def _check_fm_columns(feature_columns):
-    if isinstance(feature_columns, collections.Iterator):
-        feature_columns = list(feature_columns)
-    column_num = len(feature_columns)
-    if column_num < 2:
-        raise ValueError('feature_columns must have as least two elements.')
-    dimension = -1
-    for column in feature_columns:
-        if dimension != -1 and column.dimension != dimension:
-            raise ValueError('fm_feature_columns must have the same dimension.')
-        dimension = column.dimension
-    return column_num, dimension
-
-
 '''
 用组合将模型重新封装,使用函数式 API, 因为model类对输入不灵活，比如使用特征工程时想将Input作为输入
 '''
+
+
+# # 自定义一个层次，用于计算损失，输出不使用，使用add_loss收集loss
+# class MultiTaskLossLayer(Layer):
+#     def __init__(self, rating_weight, retrieval_weight, name="MultiTaskLossLayer"):
+#         super().__init__(name=name)
+#         self.rating_weight = rating_weight
+#         self.retrieval_weight = retrieval_weight
+#         self.rating_task: tf.keras.layers.Layer = tfrs.tasks.Ranking(
+#             loss=tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM),
+#             # 使用tf.distribute时，需要明确损失https://www.tensorflow.org/tutorials/distribute/custom_training
+#             metrics=[tf.keras.metrics.RootMeanSquaredError()],
+#         )
+#         self.retrieval_task: tf.keras.layers.Layer = tfrs.tasks.Retrieval(
+#             metrics=None
+#         )
+#
+#     def call(self, inputs, training=None, **kwargs):
+#         ratings = inputs[0]
+#         user_embeddings, movie_embeddings, rating_predictions = inputs[1]
+#         rating_loss = self.rating_task(
+#             labels=ratings,
+#             predictions=rating_predictions,
+#         )
+#         retrieval_loss = self.retrieval_task(user_embeddings, movie_embeddings)
+#
+#         # add_loss本用于收集layer的正则化损失，这里使用add_loss收集损失，方便灵活定义损失，不局限于(y_true,y_predict)的参数定义
+#         self.add_loss(self.rating_weight * rating_loss + self.retrieval_weight * retrieval_loss)
+#
+#         # unused return value
+#         return None
 
 
 class TowerWrapper:
@@ -40,8 +58,13 @@ class TowerWrapper:
                  user_columns,
                  item_columns,
                  interaction_columns,
+                 rating_weight: float,
+                 retrieval_weight: float,
                  user_model: Layer = None,  # 输出一个用户向量
                  item_model: Layer = None,  # 输出一个item向量
+                 match_model: Layer = None,
+                 rating_model: Layer = None,
+                 interaction_model: Layer = None,
                  activation=None,
                  ):
         ''''''
@@ -49,37 +72,33 @@ class TowerWrapper:
         self.user_columns = user_columns
         self.item_columns = item_columns
         self.interaction_columns = interaction_columns
+        self.rating_weight = rating_weight
+        self.retrieval_weight = retrieval_weight
         self.user_model = user_model
         self.item_model = item_model
+        self.match_model = match_model
+        self.rating_model = rating_model
+        self.interaction_model = interaction_model
         self.activation = activations.get(activation)
 
     '''
     前向传播过程处理，输出outputs
     '''
 
-    def _forward(self, inputs, linear_model, dnn_model, fm_model, training=None):
-        if not isinstance(inputs, (tuple, list)) or len(inputs) != 2:
-            linear_inputs = dnn_inputs = inputs
-        else:
-            linear_inputs, dnn_inputs = inputs
+    def _forward(self, inputs, user_model, item_model, interaction_model, rating_model, training=None):
+        if not isinstance(inputs, (tuple, list)) or len(inputs) != 3:
+            raise ValueError('input must have 3 item.')
 
-        linear_output = linear_model(linear_inputs)
-        # pylint: disable=protected-access
-        if dnn_model._expects_training_arg:
-            if training is None:
-                training = tf.keras.backend.learning_phase()
-            dnn_output = dnn_model(dnn_inputs, training=training)
-        else:
-            dnn_output = dnn_model(dnn_inputs)
+        user_inputs, item_inputs, interaction_input = inputs
+        user_embeddings = user_model(user_inputs)
+        item_embeddings = item_model(item_inputs)
+        interaction_output = interaction_model(interaction_input)
 
-        column_num, dimension = _check_fm_columns(self.deep_columns)
-        fm_inputs = tf.reshape(dnn_inputs, (-1, column_num, dimension))  # (batch_size,column_num, embedding_size)
-        fm_output = fm_model(fm_inputs)  # (batch_size, feature_num, embedding_size)
-        output = tf.nest.map_structure(
-            lambda x, y, z: (x + y + z), linear_output, dnn_output, fm_output)  # dnn输出维度可能不为1，使用
-        if self.activation:
-            return tf.nest.map_structure(self.activation, output)
-        return output
+        # todo:暂时简单concat，
+        output = tf.concat([user_embeddings, item_embeddings, interaction_output], axis=1)
+        output = rating_model(output)
+
+        return user_embeddings, item_embeddings, output
 
     '''
     功能：拿到input、output，创建模型、编译、打印模型信息
@@ -87,37 +106,57 @@ class TowerWrapper:
 
     def build_model(self):
         inputs = input_layer(self.feature_spec)
-        dnn_inputs = tf.keras.layers.DenseFeatures(self.deep_columns)(inputs)
-        linear_inputs = tf.keras.layers.DenseFeatures(self.wide_columns)(inputs)
+        user_inputs = tf.keras.layers.DenseFeatures(self.user_columns)(inputs)
+        item_inputs = tf.keras.layers.DenseFeatures(self.item_columns)(inputs)
+        interaction_input = tf.keras.layers.DenseFeatures(self.interaction_columns)(inputs)
 
-        if self.linear_model:
-            linear_model = self.linear_model
+        if self.user_model:
+            user_model = self.user_model
         else:
-            linear_model = Linear(mode=1)
-            # linear_model = LinearModel()
+            user_model = DNN(hidden_units=[128, 64, 64], l2_reg=0.01)
 
-        if self.dnn_model:
-            dnn_model = self.dnn_model
+        if self.item_model:
+            item_model = self.item_model
         else:
-            dnn_model = DNN(hidden_units=[128, 64, 2], l2_reg=0.01)
+            item_model = DNN(hidden_units=[128, 64, 64], l2_reg=0.01)
             # dnn_model = tf.keras.Sequential([tf.keras.layers.Dense(units=256),
             #                                  tf.keras.layers.Dense(units=128),
             #                                  tf.keras.layers.Dense(units=64),
             #                               tf.keras.layers.Dense(units=2)])
 
-        if self.fm_model:
-            fm_model = self.fm_model
+        if self.interaction_model:
+            interaction_model = self.interaction_model
         else:
-            fm_model = FM()
+            interaction_model = FM()
 
-        outputs = self._forward(inputs=(linear_inputs, dnn_inputs),
-                                linear_model=linear_model,
-                                dnn_model=dnn_model,
-                                fm_model=fm_model)
-        model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        if self.rating_model:
+            rating_model = self.rating_model
+        else:
+            rating_model = DNN(hidden_units=[128, 64, 1], l2_reg=0.01)
 
+        if self.match_model:
+            match_model = self.match_model
+        else:
+            # 每个batch内负采样计算交叉墒
+            match_model = tfrs.tasks.Retrieval(
+                metrics=None  # tfrs.metrics.FactorizedTopK(candidates=movies.batch(128).map(self.item_model))
+            )
+
+        outputs = self._forward(inputs=(user_inputs, item_inputs, interaction_input),
+                                user_model=user_model,
+                                item_model=item_model,
+                                interaction_model=interaction_model,
+                                rating_model=rating_model)
+
+        user_embeddings, item_embeddings, rating_output = outputs
+
+        retrieval_loss = match_model(user_embeddings, item_embeddings)
+        model = tf.keras.Model(inputs=inputs, outputs=rating_output)
+        # add_loss本用于收集layer的正则化损失，这里使用add_loss收集召回任务损失，不局限于(y_true,y_predict)的参数定义, 排序任务损失，正常计算
+        # todo:后面可能需要针对不同的损失定义不同训练步骤，在此暂时简单处理
+        model.add_loss(retrieval_loss)
         model.compile(optimizer='adam',
-                      loss='binary_crossentropy',
+                      loss='binary_crossentropy',  # 使用loss层计算损失
                       metrics=['accuracy'])
         logging.info(model.summary())
 
@@ -125,4 +164,5 @@ class TowerWrapper:
 
     def train_model(self):
         # 暂时不实现
+
         pass
